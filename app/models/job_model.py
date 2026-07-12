@@ -1,5 +1,6 @@
 from app.core.database import Base
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import UUID
 from app.schemas.job_schema import JobStatus
 from datetime import datetime, timezone
@@ -10,74 +11,74 @@ class Job(Base):
 
     __tablename__ = "jobs"
 
-    job_id = Column(
+    job_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
     )
 
-    user_id = Column(
+    user_id: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
         index=True,
     )
 
-    filename = Column(
+    filename: Mapped[str] = mapped_column(
         String(512),
         nullable=False,
     )
 
-    minio_object_key = Column(
+    minio_object_key: Mapped[str] = mapped_column(
         String(1024),
         nullable=False,
     )
 
-    qdrant_collection = Column(
+    qdrant_collection: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
         default="pdf_knowledge_base",
     )
 
-    status = Column(
+    status: Mapped[str] = mapped_column(
         String(50),
         nullable=False,
         default=JobStatus.QUEUED.value,
         index=True,
     )
 
-    progress = Column(
+    progress: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
         default=0,
     )
 
-    current_stage = Column(
+    current_stage: Mapped[str] = mapped_column(
         String(64),
         nullable=True,
     )
 
-    chunks_created = Column(
+    chunks_created: Mapped[int] = mapped_column(
         Integer,
         nullable=True,
     )
 
-    pages_processed = Column(
+    pages_processed: Mapped[int] = mapped_column(
         Integer,
         nullable=True,
     )
 
-    error_message = Column(
+    error_message: Mapped[str] = mapped_column(
         Text,
         nullable=True,
     )
 
-    started_at = Column(
+    started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
 
-    completed_at = Column(
+    completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )

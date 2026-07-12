@@ -15,7 +15,6 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.storage_service import StorageService, get_storage_service
 from app.core.database import get_async_session
@@ -26,6 +25,7 @@ from app.core.config import (
     ALLOWED_CONTENT_TYPES,
     REDIS_BROKER_URL,
     QDRANT_DB_URL,
+    DEFAULT_COLLECTION
 )
 from app.workers.tasks import process_pdf_task
 
@@ -61,7 +61,7 @@ async def upload_pdfs(
         job_id = str(uuid.uuid4())
         filename = file.filename or f"upload_{job_id}.pdf"
 
-        object_key = StorageService.make_object_key(user_id, job_id, filename)
+        object_key = StorageService.make_object_key(job_id, filename)
 
         file_bytes = await file.read()
         file_size = len(file_bytes)
@@ -87,11 +87,12 @@ async def upload_pdfs(
             user_id=user_id,
             filename=filename,
             minio_object_key=object_key,
-            qdrant_collection="pdf_knowledge_base",
+            qdrant_collection=DEFAULT_COLLECTION,
             status=JobStatus.QUEUED.value,
             progress=0,
             started_at=datetime.now(timezone.utc),
         )
+        
         db.add(job)
         await db.commit()
         await db.refresh(job)
@@ -222,7 +223,7 @@ async def delete_job(
         url=QDRANT_DB_URL,
         collection_name=job.qdrant_collection,
     )
-    deleted = await indexer.delete_document(job.filename, user_id=job.user_id)
+    deleted = await indexer.delete_document(job.filename)
     logger.info(f"Deleted {deleted} Qdrant points for job {job_id}")
 
     await db.delete(job)
