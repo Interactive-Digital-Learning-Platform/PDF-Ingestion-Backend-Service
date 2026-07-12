@@ -5,41 +5,68 @@ from typing import List
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
+    Condition,
     Distance,
     FieldCondition,
     Filter,
+    FilterSelector,
     MatchValue,
     PointStruct,
     VectorParams,
-    FilterSelector,
 )
 
+from app.core.config import (
+    DEFAULT_COLLECTION,
+    EMBEDDING_DIM,
+    MAX_RETRIES,
+    QDRANT_DB_URL,
+    RETRY_BASE_DELAY,
+    UPSERT_BATCH_SIZE,
+)
 from app.pipeline.chunker import Chunk
-from app.core.config import DEFAULT_COLLECTION, UPSERT_BATCH_SIZE, QDRANT_DB_URL
 
 logger = logging.getLogger(__name__)
 
 
 class VectorIndexer:
-
     def __init__(
         self,
-        url: str = QDRANT_DB_URL,
+        url: str = QDRANT_DB_URL or "",
         collection_name: str = DEFAULT_COLLECTION,
         api_key: str | None = None,
     ):
         self.collection_name = collection_name
         self.client = AsyncQdrantClient(url=url, api_key=api_key)
         logger.info(
-            f"VectorIndexer initialised — " f"collection={collection_name}, url={url}"
+            f"VectorIndexer initialised — collection={collection_name}, url={url}"
         )
 
-    async def ensure_collection(self, vector_dim: int = 384) -> None:
+    async def ensure_collection(self, vector_dim: int = EMBEDDING_DIM) -> None:
 
         existing = await self.client.get_collections()
         names = [c.name for c in existing.collections]
 
         if self.collection_name in names:
+            info = await self.client.get_collection(self.collection_name)
+            vectors_config = info.config.params.vectors
+
+            if vectors_config is None:
+                raise RuntimeError(
+                    f"Collection '{self.collection_name}' has no vector config."
+                )
+
+            existing_dim = (
+                next(iter(vectors_config.values())).size
+                if isinstance(vectors_config, dict)
+                else vectors_config.size
+            )
+
+            if existing_dim != vector_dim:
+                raise RuntimeError(
+                    f"Collection '{self.collection_name}' already exists with "
+                    f"dim={existing_dim}, but current model requires dim={vector_dim}. "
+                    f"Drop the collection or update EMBEDDING_DIM in .env."
+                )
             logger.info(
                 f"Collection '{self.collection_name}' exists — skipping creation"
             )
@@ -61,7 +88,6 @@ class VectorIndexer:
         self,
         chunks: List[Chunk],
         embeddings: List[List[float]],
-        user_id: str = "",
         job_id: str = "",
     ) -> int:
 
@@ -74,10 +100,7 @@ class VectorIndexer:
             logger.warning("index_chunks called with empty list — nothing to do")
             return 0
 
-        logger.info(
-            f"Indexing {len(chunks)} chunks into '{self.collection_name}' "
-            f"(user={user_id}, job={job_id})"
-        )
+        logger.info(f"Indexing {len(chunks)} chunks into '{self.collection_name}' ")
         t0 = time.perf_counter()
 
         points = [
@@ -86,7 +109,6 @@ class VectorIndexer:
                 vector=embeddings[i],
                 payload={
                     "text": chunks[i].text,
-                    "user_id": user_id,
                     "job_id": job_id,
                     **chunks[i].metadata,
                 },
@@ -104,23 +126,18 @@ class VectorIndexer:
             await self._upsert_with_retry(batch, batch_idx, len(batches))
             total_upserted += len(batch)
             logger.debug(
-                f"  Batch {batch_idx + 1}/{len(batches)} — "
-                f"{len(batch)} points upserted"
+                f"  Batch {batch_idx + 1}/{len(batches)} — {len(batch)} points upserted"
             )
 
         elapsed = time.perf_counter() - t0
         logger.info(f"Indexing complete — {total_upserted} points in {elapsed:.2f}s")
         return total_upserted
 
-    async def delete_document(self, filename: str, user_id: str = "") -> int:
+    async def delete_document(self, filename: str) -> int:
 
-        must_conditions = [
+        must_conditions: List[Condition] = [
             FieldCondition(key="filename", match=MatchValue(value=filename))
         ]
-        if user_id:
-            must_conditions.append(
-                FieldCondition(key="user_id", match=MatchValue(value=user_id))
-            )
 
         count_filter = Filter(must=must_conditions)
 
@@ -140,19 +157,33 @@ class VectorIndexer:
             points_selector=FilterSelector(filter=count_filter),
         )
 
-        logger.info(
-            f"Deleted {count} points for filename='{filename}' " f"user='{user_id}'"
-        )
+        logger.info(f"Deleted {count} points for filename='{filename}'")
         return count
 
     async def collection_info(self) -> dict:
 
         info = await self.client.get_collection(self.collection_name)
+
+        vectors_config = info.config.params.vectors
+
+        if vectors_config is None:
+            raise RuntimeError(
+                f"Collection '{self.collection_name}' has no vector config."
+            )
+
+        if isinstance(vectors_config, dict):
+            first = next(iter(vectors_config.values()))
+            dim = first.size
+            distance = str(first.distance)
+        else:
+            dim = vectors_config.size
+            distance = str(vectors_config.distance)
+
         return {
             "collection": self.collection_name,
             "total_points": info.points_count,
-            "vector_dim": info.config.params.vectors.size,
-            "distance": str(info.config.params.vectors.distance),
+            "vector_dim": dim,
+            "distance": distance,
             "status": str(info.status),
         }
 
@@ -161,7 +192,7 @@ class VectorIndexer:
         batch: List[PointStruct],
         batch_idx: int,
         total_batches: int,
-        max_retries: int = 3,
+        max_retries: int = MAX_RETRIES,
     ) -> None:
         last_error = None
         for attempt in range(1, max_retries + 1):
@@ -173,7 +204,7 @@ class VectorIndexer:
                 )
                 return
             except Exception as e:
-                delay = 1.0 * (2 ** (attempt - 1))
+                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
                     f"  Upsert batch {batch_idx + 1}/{total_batches} failed "
                     f"(attempt {attempt}/{max_retries}) — "

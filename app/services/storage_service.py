@@ -6,11 +6,12 @@ from typing import BinaryIO
 
 from minio import Minio
 from minio.error import S3Error
+
 from app.core.config import (
     MINIO_ACCESS_KEY,
-    MINIO_SECRET_KEY,
     MINIO_BUCKET,
     MINIO_ENDPOINT,
+    MINIO_SECRET_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,10 +49,10 @@ class StorageService:
         await asyncio.to_thread(_ensure)
 
     @staticmethod
-    def make_object_key(user_id: str, job_id: str, filename: str) -> str:
+    def make_object_key(job_id: str, filename: str) -> str:
 
         safe_filename = Path(filename).name
-        return f"{user_id}/{job_id}/{safe_filename}"
+        return f"{job_id}/{safe_filename}"
 
     async def upload(
         self,
