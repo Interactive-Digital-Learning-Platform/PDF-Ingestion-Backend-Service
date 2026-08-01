@@ -1,7 +1,8 @@
 from celery import Celery
-from app.core.config import REDIS_BROKER_URL, REDIS_BACKEND_URL
 
-celery = Celery("pdf_ingestion", broker=REDIS_BROKER_URL, backend=REDIS_BACKEND_URL)
+from app.core.config import settings
+
+celery = Celery("pdf_ingestion", broker=settings.REDIS_BROKER_URL, backend=settings.REDIS_BACKEND_URL)
 
 celery.conf.update(
     task_serializer="json",

@@ -1,5 +1,6 @@
 import enum
 
+
 class JobStatus(str, enum.Enum):
     QUEUED     = "queued"
     PROCESSING = "processing"
