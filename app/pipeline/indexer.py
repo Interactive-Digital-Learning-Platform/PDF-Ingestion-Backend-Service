@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+import uuid
 from typing import List
 
 from qdrant_client import AsyncQdrantClient
@@ -15,24 +16,22 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from app.core.config import (
-    DEFAULT_COLLECTION,
-    EMBEDDING_DIM,
-    MAX_RETRIES,
-    QDRANT_DB_URL,
-    RETRY_BASE_DELAY,
-    UPSERT_BATCH_SIZE,
-)
+from app.constants.namespaces import _QDRANT_POINT_ID_NAMESPACE_VALUE
+from app.core.config import settings
 from app.pipeline.chunker import Chunk
 
 logger = logging.getLogger(__name__)
 
+def _deterministic_point_id(job_id: str, chunk_text: str) -> str:
+    return str(uuid.uuid5(_QDRANT_POINT_ID_NAMESPACE_VALUE, f"{job_id}:{chunk_text}"))
 
+
+    
 class VectorIndexer:
     def __init__(
         self,
-        url: str = QDRANT_DB_URL or "",
-        collection_name: str = DEFAULT_COLLECTION,
+        url: str = settings.QDRANT_DB_URL or "",
+        collection_name: str = settings.DEFAULT_COLLECTION,
         api_key: str | None = None,
     ):
         self.collection_name = collection_name
@@ -41,7 +40,7 @@ class VectorIndexer:
             f"VectorIndexer initialised — collection={collection_name}, url={url}"
         )
 
-    async def ensure_collection(self, vector_dim: int = EMBEDDING_DIM) -> None:
+    async def ensure_collection(self, vector_dim: int = settings.EMBEDDING_DIM) -> None:
 
         existing = await self.client.get_collections()
         names = [c.name for c in existing.collections]
@@ -105,11 +104,12 @@ class VectorIndexer:
 
         points = [
             PointStruct(
-                id=chunks[i].chunk_id,
+                id=_deterministic_point_id(job_id, chunks[i].text),
                 vector=embeddings[i],
                 payload={
                     "text": chunks[i].text,
                     "job_id": job_id,
+                    "original_chunk_id": chunks[i].chunk_id,
                     **chunks[i].metadata,
                 },
             )
@@ -118,8 +118,8 @@ class VectorIndexer:
 
         total_upserted = 0
         batches = [
-            points[i : i + UPSERT_BATCH_SIZE]
-            for i in range(0, len(points), UPSERT_BATCH_SIZE)
+            points[i : i + settings.UPSERT_BATCH_SIZE]
+            for i in range(0, len(points), settings.UPSERT_BATCH_SIZE)
         ]
 
         for batch_idx, batch in enumerate(batches):
@@ -133,10 +133,10 @@ class VectorIndexer:
         logger.info(f"Indexing complete — {total_upserted} points in {elapsed:.2f}s")
         return total_upserted
 
-    async def delete_document(self, filename: str) -> int:
+    async def delete_document(self, job_id: str) -> int:
 
         must_conditions: List[Condition] = [
-            FieldCondition(key="filename", match=MatchValue(value=filename))
+            FieldCondition(key="job_id", match=MatchValue(value=job_id))
         ]
 
         count_filter = Filter(must=must_conditions)
@@ -149,7 +149,7 @@ class VectorIndexer:
         count = count_result.count
 
         if count == 0:
-            logger.info(f"No points found for filename='{filename}'")
+            logger.info(f"No points found for job_id='{job_id}'")
             return 0
 
         await self.client.delete(
@@ -157,7 +157,7 @@ class VectorIndexer:
             points_selector=FilterSelector(filter=count_filter),
         )
 
-        logger.info(f"Deleted {count} points for filename='{filename}'")
+        logger.info(f"Deleted {count} points for filename='{job_id}'")
         return count
 
     async def collection_info(self) -> dict:
@@ -192,7 +192,7 @@ class VectorIndexer:
         batch: List[PointStruct],
         batch_idx: int,
         total_batches: int,
-        max_retries: int = MAX_RETRIES,
+        max_retries: int = settings.MAX_RETRIES,
     ) -> None:
         last_error = None
         for attempt in range(1, max_retries + 1):
@@ -204,7 +204,7 @@ class VectorIndexer:
                 )
                 return
             except Exception as e:
-                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                delay = settings.RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
                     f"  Upsert batch {batch_idx + 1}/{total_batches} failed "
                     f"(attempt {attempt}/{max_retries}) — "
@@ -217,3 +217,6 @@ class VectorIndexer:
             f"Upsert batch {batch_idx + 1} failed after {max_retries} retries. "
             f"Last error: {last_error}"
         )
+
+async def close(self) -> None:
+    await self.client.close()

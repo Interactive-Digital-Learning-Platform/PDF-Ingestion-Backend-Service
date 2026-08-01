@@ -1,48 +1,59 @@
-import os
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-DB_URL = os.getenv("DB_URL")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "nomic-embed-text-v1.5")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+class Settings(BaseSettings):
+    
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
 
-MAX_TOKENS_PER_INPUT = int(os.getenv("MAX_TOKENS_PER_INPUT", 8192))
-MAX_INPUTS_PER_BATCH = int(os.getenv("MAX_INPUTS_PER_BATCH", 32))
+    DB_URL: str
+    EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
+    OPENAI_API_KEY:str
+    
+    MAX_TOKENS_PER_INPUT: int = 8192
+    MAX_INPUTS_PER_BATCH: int = 32
+    
+    MAX_RETRIES: int = 3
+    RETRY_BASE_DELAY: float = 1.0
+    
+    # Qdrant configurations
+    DEFAULT_COLLECTION: str = "pdf_knowledge_base"
+    UPSERT_BATCH_SIZE: int = 100
+    QDRANT_DB_URL:str
+    
+    # Minio configurations
+    MINIO_ENDPOINT: str
+    MINIO_ACCESS_KEY: str
+    MINIO_SECRET_KEY: str
+    MINIO_BUCKET: str
+    
+    # Redis configurations
+    REDIS_BROKER_URL: str
+    REDIS_BACKEND_URL: str
+    
+    
+    # Pipeline batch configs
+    PAGE_BATCH_SIZE: int = 20
+    PAGE_OVERLAP: int = 2
+    CHUNK_SIZE: int = 512
+    CHUNK_OVERLAP: int = 64
+    
+    ALLOWED_CONTENT_TYPES: set[str]
+    
+    MAX_FILE_SIZE_MB: int = 100
+    
+    EMBEDDING_DIM: int = 768
 
-MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
-RETRY_BASE_DELAY = float(os.getenv("RETRY_BASE_DELAY", 1.0))
+    MULTIPART_CHUNK_SIZE: int = 8 * 1024 * 1024
+    DB_POOL_SIZE:int = 1
+    DB_MAX_OVERFLOW: int = 0
+    
 
-# Qdrant configurations
-DEFAULT_COLLECTION = os.getenv("DEFAULT_COLLECTION", "pdf_knowledge_base")
-UPSERT_BATCH_SIZE = 100
-QDRANT_DB_URL = os.getenv("QDRANT_DB_URL")
-
-# Minio configurations
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT")
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET")
-
-# Redis configurations
-REDIS_BROKER_URL = os.getenv("REDIS_BROKER_URL", "redis://localhost:6379/0")
-REDIS_BACKEND_URL = os.getenv("REDIS_BACKEND_URL", "redis://localhost:6379/1")
+settings = Settings()
 
 
-# Pipeline batch configs
-PAGE_BATCH_SIZE = 20
-PAGE_OVERLAP = 2
-CHUNK_SIZE = 512
-CHUNK_OVERLAP = 64
 
-_allowed_content_types_raw = os.getenv("ALLOWED_CONTENT_TYPES", "")
-ALLOWED_CONTENT_TYPES = {
-    content_type.strip()
-    for content_type in _allowed_content_types_raw.split(",")
-    if content_type.strip()
-}
-MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 100))
-
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", 768))

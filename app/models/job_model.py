@@ -1,10 +1,12 @@
-from app.core.database import Base
-from sqlalchemy import DateTime, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.dialects.postgresql import UUID
-from app.schemas.job_schema import JobStatus
-from datetime import datetime, timezone
 import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import DateTime, Integer, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.core.database import Base
+from app.schemas.job_schema import JobStatus
 
 
 class Job(Base):

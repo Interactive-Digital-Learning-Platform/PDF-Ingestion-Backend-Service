@@ -1,15 +1,9 @@
 import logging
 import time
-from typing import List
 
 from sentence_transformers import SentenceTransformer
 
-from app.core.config import (
-    # EMBEDDING_DIM,
-    EMBEDDING_MODEL,
-    MAX_INPUTS_PER_BATCH,
-    MAX_TOKENS_PER_INPUT,
-)
+from app.core.config import settings
 from app.pipeline.chunker import Chunk
 
 logger = logging.getLogger(__name__)
@@ -18,9 +12,9 @@ logger = logging.getLogger(__name__)
 class EmbeddingGenerator:
     def __init__(
         self,
-        model_name: str = EMBEDDING_MODEL,
+        model_name: str = settings.EMBEDDING_MODEL,
         device: str = "cpu",
-        batch_size: int = MAX_INPUTS_PER_BATCH,
+        batch_size: int = settings.MAX_INPUTS_PER_BATCH,
     ):
         self.model_name = model_name
         self.batch_size = batch_size
@@ -34,10 +28,10 @@ class EmbeddingGenerator:
 
         logger.info(
             f"Model ready — dim={self.embedding_dimension()}, "
-            f"max_tokens={MAX_TOKENS_PER_INPUT}, device={device}"
+            f"max_tokens={settings.MAX_TOKENS_PER_INPUT}, device={device}"
         )
 
-    def embed_chunks(self, chunks: List[Chunk]) -> List[List[float]]:
+    def embed_chunks(self, chunks: list[Chunk]) -> list[list[float]]:
 
         if not chunks:
             return []
@@ -71,7 +65,7 @@ class EmbeddingGenerator:
 
         return embeddings
 
-    def embed_single(self, text: str) -> List[float]:
+    def embed_single(self, text: str) -> list[float]:
 
         query_text = f"search_query: {text}"
         query_text = self._truncate_if_needed(query_text, label="query")
@@ -91,7 +85,7 @@ class EmbeddingGenerator:
 
         return dim
 
-    def _prepare_texts(self, chunks: List[Chunk]) -> List[str]:
+    def _prepare_texts(self, chunks: list[Chunk]) -> list[str]:
         texts = []
         for chunk in chunks:
             text = chunk.text.replace("\n", " ").strip()
@@ -106,12 +100,12 @@ class EmbeddingGenerator:
 
         estimated_tokens = int(len(text.split()) * 1.3)
 
-        if estimated_tokens > MAX_TOKENS_PER_INPUT:
-            max_words = int(MAX_TOKENS_PER_INPUT / 1.3)
+        if estimated_tokens > settings.MAX_TOKENS_PER_INPUT:
+            max_words = int(settings.MAX_TOKENS_PER_INPUT / 1.3)
             words = text.split()[:max_words]
             text = " ".join(words)
             logger.warning(
-                f"  {label} exceeded ~{MAX_TOKENS_PER_INPUT} tokens "
+                f"  {label} exceeded ~{settings.MAX_TOKENS_PER_INPUT} tokens "
                 f"(est. {estimated_tokens}) — truncated to {max_words} words"
             )
         return text

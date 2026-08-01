@@ -1,24 +1,24 @@
-from fastapi import FastAPI
 from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.services.storage_service import StorageService
-from app.pipeline.indexer import VectorIndexer
-from app.pipeline.embedder import EmbeddingGenerator
+
 from app.routes.ingestion_routes import ingestion_router
+from app.services.storage_service import StorageService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     storage_service = StorageService()
+    await storage_service.open()
     await storage_service.ensure_bucket()
+    app.state.storage_service = storage_service
 
-    embedder = EmbeddingGenerator()
-    indexer = VectorIndexer()
-    await indexer.ensure_collection(
-        vector_dim=embedder.embedding_dimension()
-    )
+    try:
+        yield
+    finally:
+        await storage_service.close()
 
-    yield
 
 
 app = FastAPI(lifespan=lifespan)

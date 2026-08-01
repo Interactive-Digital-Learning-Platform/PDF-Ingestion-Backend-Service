@@ -1,8 +1,9 @@
-import fitz
 import re
 from dataclasses import dataclass, field
-from typing import Generator
 from pathlib import Path
+from typing import Generator
+
+import fitz
 
 
 @dataclass
@@ -115,9 +116,10 @@ class PDFExtractor:
 
     def _ocr_page(self, page: fitz.Page, document: fitz.Document) -> str:
         try:
+            import io
+
             import pytesseract
             from PIL import Image
-            import io
 
             mat = fitz.Matrix(200 / 72, 200 / 72)
             pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)

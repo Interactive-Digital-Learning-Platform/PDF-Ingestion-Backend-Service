@@ -1,9 +1,10 @@
-from dataclasses import dataclass, field
-from app.constants.patterns import _HEADING_PATTERNS
-from app.pipeline.extractor import PageContent
-from typing import List
 import re
 import uuid
+from dataclasses import dataclass, field
+from typing import List
+
+from app.constants.patterns import _HEADING_PATTERNS
+from app.pipeline.extractor import PageContent
 
 
 @dataclass
@@ -40,7 +41,7 @@ class HierarchicalChunker:
         self.chunk_overlap = chunk_overlap
         self.min_chunk_size = min_chunk_size
 
-    def chunk_pages(self, pages: List[PageContent]) -> List[Chunk]:
+    def chunk_pages(self, pages: list[PageContent]) -> list[Chunk]:
 
         if not pages:
             return []
@@ -48,7 +49,7 @@ class HierarchicalChunker:
         doc_text, page_map = self._merge_pages(pages)
         sections = self._split_into_sections(doc_text)
 
-        raw_chunks: List[str] = []
+        raw_chunks: list[str] = []
         for section in sections:
             raw_chunks.extend(self._chunk_section(section))
 
@@ -59,7 +60,7 @@ class HierarchicalChunker:
 
         return chunks
 
-    def _merge_pages(self, pages: List[PageContent]):
+    def _merge_pages(self, pages: list[PageContent]):
         parts = []
         page_map = []
         cursor = 0
