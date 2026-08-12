@@ -21,6 +21,7 @@ from app.core.config import settings
 from app.core.database import get_async_session
 from app.models.job_model import Job
 from app.schemas.job_schema import JobStatus
+from app.services.job_service import JobService, get_job_service
 from app.services.storage_service import StorageService, get_storage_service
 from app.workers.tasks import process_pdf_task
 
@@ -116,6 +117,14 @@ async def upload_pdfs(
         )
 
     return {"jobs": created_jobs}
+
+
+@ingestion_router.get("/jobs")
+async def list_jobs(
+    job_service: JobService = Depends(get_job_service),
+):
+    jobs = await job_service.get_all_jobs()
+    return {"jobs": [job.to_dict() for job in jobs]}
 
 
 @ingestion_router.websocket("/ws/{job_id}")

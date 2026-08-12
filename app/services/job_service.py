@@ -12,7 +12,9 @@ class JobService:
 
     async def get_all_jobs(self) -> list[Job]:
 
-        result = await self.session.execute(select(Job))
+        result = await self.session.execute(
+            select(Job).order_by(Job.started_at.desc())
+        )
 
         return list(result.scalars().all())
 

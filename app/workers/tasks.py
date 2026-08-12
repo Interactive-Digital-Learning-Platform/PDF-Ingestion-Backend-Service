@@ -174,6 +174,9 @@ async def _run_pipeline(
                 all_chunks_count += len(new_chunks)
 
         for page in extractor.extract(tmp_path):
+            page.metadata["filename"] = filename
+            page.metadata["source"] = filename
+            
             page_buffer.append(page)
             pages_extracted += 1
 
