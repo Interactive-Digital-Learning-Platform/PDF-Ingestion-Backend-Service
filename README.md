@@ -50,8 +50,16 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 In a second terminal, start the Celery worker that processes ingestion jobs:
 
 ```bash
-uv run celery -A app.workers.celery_app.celery worker --loglevel=info --queues=ingestion
+uv run celery -A app.workers.celery_app worker   --loglevel=info   --concurrency=1   -Q ingestion
 ```
+
+Or in Windows:
+uv run celery -A app.workers.celery_app worker `
+  --loglevel=info `
+  --concurrency=1 `
+  --pool=solo `
+  -Q ingestion
+
 
 The API is then available directly at `http://localhost:8001` and through the
 gateway at `http://localhost:8080/api/pdf/`.

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     DB_URL: str
     EMBEDDING_MODEL: str = "nomic-ai/nomic-embed-text-v1.5"
-    OPENAI_API_KEY:str
+    # OPENAI_API_KEY:str
     
     MAX_TOKENS_PER_INPUT: int = 8192
     MAX_INPUTS_PER_BATCH: int = 32
