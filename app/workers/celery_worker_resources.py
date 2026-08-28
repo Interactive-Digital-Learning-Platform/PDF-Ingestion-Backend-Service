@@ -2,6 +2,7 @@ import asyncio
 import logging
 import threading
 
+import httpx
 import redis
 from celery.signals import worker_process_init, worker_process_shutdown
 from sqlalchemy import create_engine
@@ -9,7 +10,6 @@ from sqlalchemy import create_engine
 from app.core.config import settings
 from app.pipeline.chunker import HierarchicalChunker
 from app.pipeline.embedder import EmbeddingGenerator
-from app.pipeline.indexer import VectorIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -72,18 +72,11 @@ def init_worker_resources(**kwargs) -> None:
     if not _loop_ready.wait(timeout=10):
         raise RuntimeError("Worker event loop failed to start within 10s")
 
+    async def _make_http_client() -> httpx.AsyncClient:
+        return httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT_SECONDS)
 
-    indexer = VectorIndexer(
-        url=settings.QDRANT_DB_URL, collection_name=settings.DEFAULT_COLLECTION
-    )
-
-    fut = asyncio.run_coroutine_threadsafe(
-        indexer.ensure_collection(_resources["embedder"].embedding_dimension()),
-        _loop
-    )
-
-    fut.result()
-    _resources["indexer"] = indexer
+    fut = asyncio.run_coroutine_threadsafe(_make_http_client(), _loop)
+    _resources["http_client"] = fut.result()
 
     logger.info("Worker resources ready")
 
@@ -92,14 +85,14 @@ def init_worker_resources(**kwargs) -> None:
 def shutdown_worker_resources(**kwargs) -> None:
     global _loop, _loop_thread
 
-    indexer = _resources.pop("indexer", None)
-    if indexer is not None and _loop is not None:
+    http_client = _resources.pop("http_client", None)
+    if http_client is not None and _loop is not None:
         try:
-            fut = asyncio.run_coroutine_threadsafe(indexer.close(), _loop)
+            fut = asyncio.run_coroutine_threadsafe(http_client.aclose(), _loop)
             fut.result(timeout=5)
 
         except Exception:
-            logger.warning("Failed to close VectorIndexer cleanly on shutdown")
+            logger.warning("Failed to close http client cleanly on shutdown")
 
 
     if _loop is not None:
@@ -159,20 +152,11 @@ def get_redis_client():
     return _resources["redis_client"]
 
 
-def get_indexer() -> VectorIndexer:
-    if "indexer" not in _resources:
+def get_http_client() -> httpx.AsyncClient:
+    if "http_client" not in _resources:
         logger.warning(
-            "VectorIndexer requested before worker_process_init ran — "
+            "httpx.AsyncClient requested before worker_process_init ran — "
         )
-        indexer = VectorIndexer(
-            url=settings.QDRANT_DB_URL, collection_name=settings.DEFAULT_COLLECTION
-        )
-        loop = get_event_loop()
-        fut = asyncio.run_coroutine_threadsafe(
-            indexer.ensure_collection(get_embedder().embedding_dimension()),
-            loop
-        )
-        fut.result()
-        _resources["indexer"] = indexer
+        _resources["http_client"] = httpx.AsyncClient(timeout=settings.WEBHOOK_TIMEOUT_SECONDS)
 
-    return _resources["indexer"]
+    return _resources["http_client"]

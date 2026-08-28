@@ -33,12 +33,26 @@ MINIO_BUCKET=pdf-documents
 REDIS_BROKER_URL=redis://localhost:6379/0
 REDIS_BACKEND_URL=redis://localhost:6379/1
 ALLOWED_CONTENT_TYPES=["application/pdf"]
+INTERNAL_SERVICE_KEY=YOUR_SHARED_SECRET
+AI_LEARNING_ASSISTANT_BASE_URL=http://localhost:8002
 ```
 
-Apply database migrations:
+`INTERNAL_SERVICE_KEY` must be the exact same value configured in
+`AI-Learning-Assistant-Service`'s own `.env` — see
+`dev-docs/generic-pdf-processing-service.md` §7.
+
+Apply Postgres migrations:
 
 ```bash
 uv run alembic upgrade head
+```
+
+Apply Qdrant migrations — collections are never created automatically by the API or worker (see
+`dev-docs/generic-pdf-processing-service.md` §9), so this must be run before any job can target
+a given collection:
+
+```bash
+uv run python qdrant-migrations/run_migrations.py upgrade
 ```
 
 Start the API on the port expected by Nginx:
@@ -47,10 +61,13 @@ Start the API on the port expected by Nginx:
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
 ```
 
-In a second terminal, start the Celery worker that processes ingestion jobs:
+In a second terminal, start the Celery worker. It must consume both queues — `ingestion` (PDF
+processing) and `webhooks` (terminal-state callback delivery, see
+`dev-docs/generic-pdf-processing-service.md` §12) — or jobs from one of them will never be picked
+up:
 
 ```bash
-uv run celery -A app.workers.celery_app worker   --loglevel=info   --concurrency=1   -Q ingestion
+uv run celery -A app.workers.celery_app worker   --loglevel=info   --concurrency=1   -Q ingestion,webhooks
 ```
 
 Or in Windows:
@@ -58,7 +75,7 @@ uv run celery -A app.workers.celery_app worker `
   --loglevel=info `
   --concurrency=1 `
   --pool=solo `
-  -Q ingestion
+  -Q ingestion,webhooks
 
 
 The API is then available directly at `http://localhost:8001` and through the

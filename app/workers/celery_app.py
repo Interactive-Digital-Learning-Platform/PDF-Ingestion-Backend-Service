@@ -2,7 +2,12 @@ from celery import Celery
 
 from app.core.config import settings
 
-celery = Celery("pdf_ingestion", broker=settings.REDIS_BROKER_URL, backend=settings.REDIS_BACKEND_URL)
+celery = Celery(
+    "pdf_ingestion",
+    broker=settings.REDIS_BROKER_URL,
+    backend=settings.REDIS_BACKEND_URL,
+    include=["app.workers.tasks", "app.workers.webhook_tasks"],
+)
 
 celery.conf.update(
     task_serializer="json",
@@ -18,6 +23,7 @@ celery.conf.update(
     task_default_retry_delay=60,
     task_routes={
         "tasks.process_pdf": {"queue": "ingestion"},
+        "tasks.deliver_job_webhook": {"queue": "webhooks"},
     },
 )
 

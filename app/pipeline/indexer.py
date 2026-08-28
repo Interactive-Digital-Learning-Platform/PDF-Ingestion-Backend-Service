@@ -2,18 +2,15 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import List
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Condition,
-    Distance,
     FieldCondition,
     Filter,
     FilterSelector,
     MatchValue,
     PointStruct,
-    VectorParams,
 )
 
 from app.constants.namespaces import _QDRANT_POINT_ID_NAMESPACE_VALUE
@@ -40,54 +37,15 @@ class VectorIndexer:
             f"VectorIndexer initialised — collection={collection_name}, url={url}"
         )
 
-    async def ensure_collection(self, vector_dim: int = settings.EMBEDDING_DIM) -> None:
-
-        existing = await self.client.get_collections()
-        names = [c.name for c in existing.collections]
-
-        if self.collection_name in names:
-            info = await self.client.get_collection(self.collection_name)
-            vectors_config = info.config.params.vectors
-
-            if vectors_config is None:
-                raise RuntimeError(
-                    f"Collection '{self.collection_name}' has no vector config."
-                )
-
-            existing_dim = (
-                next(iter(vectors_config.values())).size
-                if isinstance(vectors_config, dict)
-                else vectors_config.size
-            )
-
-            if existing_dim != vector_dim:
-                raise RuntimeError(
-                    f"Collection '{self.collection_name}' already exists with "
-                    f"dim={existing_dim}, but current model requires dim={vector_dim}. "
-                    f"Drop the collection or update EMBEDDING_DIM in .env."
-                )
-            logger.info(
-                f"Collection '{self.collection_name}' exists — skipping creation"
-            )
-            return
-
-        await self.client.create_collection(
-            collection_name=self.collection_name,
-            vectors_config=VectorParams(
-                size=vector_dim,
-                distance=Distance.COSINE,
-            ),
-        )
-        logger.info(
-            f"Collection '{self.collection_name}' created "
-            f"(dim={vector_dim}, distance=COSINE)"
-        )
+    async def collection_exists(self) -> bool:
+        return await self.client.collection_exists(self.collection_name)
 
     async def index_chunks(
         self,
-        chunks: List[Chunk],
-        embeddings: List[List[float]],
+        chunks: list[Chunk],
+        embeddings: list[list[float]],
         job_id: str = "",
+        document_metadata: dict | None = None,
     ) -> int:
 
         if len(chunks) != len(embeddings):
@@ -107,10 +65,11 @@ class VectorIndexer:
                 id=_deterministic_point_id(job_id, chunks[i].text),
                 vector=embeddings[i],
                 payload={
+                    **(document_metadata or {}),
+                    **chunks[i].metadata,
                     "text": chunks[i].text,
                     "job_id": job_id,
                     "original_chunk_id": chunks[i].chunk_id,
-                    **chunks[i].metadata,
                 },
             )
             for i in range(len(chunks))
@@ -135,7 +94,7 @@ class VectorIndexer:
 
     async def delete_document(self, job_id: str) -> int:
 
-        must_conditions: List[Condition] = [
+        must_conditions: list[Condition] = [
             FieldCondition(key="job_id", match=MatchValue(value=job_id))
         ]
 
@@ -189,7 +148,7 @@ class VectorIndexer:
 
     async def _upsert_with_retry(
         self,
-        batch: List[PointStruct],
+        batch: list[PointStruct],
         batch_idx: int,
         total_batches: int,
         max_retries: int = settings.MAX_RETRIES,
@@ -218,5 +177,5 @@ class VectorIndexer:
             f"Last error: {last_error}"
         )
 
-async def close(self) -> None:
-    await self.client.close()
+    async def close(self) -> None:
+        await self.client.close()

@@ -7,9 +7,6 @@ import aioboto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 from fastapi import Request
-from minio import Minio
-from minio.datatypes import Bucket
-from minio.error import S3Error
 
 from app.core.config import settings
 
