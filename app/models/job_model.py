@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, DateTime, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -85,6 +85,63 @@ class Job(Base):
         nullable=True,
     )
 
+    source_service: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        server_default="pdf-ingestion-web-application",
+        index=True,
+    )
+
+    external_reference_id: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+        index=True,
+    )
+
+    caller_metadata: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    max_pages: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    callback_required: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+
+    callback_status: Mapped[str | None] = mapped_column(
+        String(20),
+        nullable=True,
+    )
+
+    callback_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+
+    callback_last_error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    callback_delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    error_code: Mapped[str | None] = mapped_column(
+        String(50),
+        nullable=True,
+    )
+
     def __repr__(self):
         return (
             f"<Job job_id={self.job_id} user_id={self.user_id} "
@@ -108,4 +165,16 @@ class Job(Base):
             "completed_at": (
                 self.completed_at.isoformat() if self.completed_at else None
             ),
+            "source_service": self.source_service,
+            "external_reference_id": self.external_reference_id,
+            "caller_metadata": self.caller_metadata,
+            "max_pages": self.max_pages,
+            "callback_required": self.callback_required,
+            "callback_status": self.callback_status,
+            "callback_attempts": self.callback_attempts,
+            "callback_last_error": self.callback_last_error,
+            "callback_delivered_at": (
+                self.callback_delivered_at.isoformat() if self.callback_delivered_at else None
+            ),
+            "error_code": self.error_code,
         }

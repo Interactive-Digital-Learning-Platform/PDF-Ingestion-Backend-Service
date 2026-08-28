@@ -10,7 +10,7 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_async_engine(settings.DB_URL)
+engine = create_async_engine(settings.DB_URL, pool_pre_ping=True, pool_recycle=300)
 
 
 async_session_maker = async_sessionmaker(

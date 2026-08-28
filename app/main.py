@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes.ingestion_routes import ingestion_router
+from app.routes.internal_ingestion_routes import internal_ingestion_router
 from app.services.storage_service import StorageService
 
 
@@ -32,6 +33,7 @@ app.add_middleware(
 )
 
 app.include_router(ingestion_router)
+app.include_router(internal_ingestion_router)
 
 
 @app.get("/", tags=["health"])
