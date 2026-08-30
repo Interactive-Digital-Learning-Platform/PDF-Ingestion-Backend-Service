@@ -17,7 +17,7 @@ class StorageService:
     def __init__(
         self,
         bucket: str = settings.MINIO_BUCKET,
-        secure: bool = False,
+        secure: bool = settings.MINIO_SECURE,
     ):
         self.bucket = bucket
         self._secure = secure
@@ -36,7 +36,9 @@ class StorageService:
             retries={"max_attempts" : 3, "mode": "standard"},
             connect_timeout=5,
             read_timeout=30,
-            max_pool_connections=5
+            max_pool_connections=5,
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
         )
 
         self._client_ctx = self._session.client(
@@ -44,7 +46,7 @@ class StorageService:
             endpoint_url=endpoint_url,
             aws_access_key_id=settings.MINIO_ACCESS_KEY,
             aws_secret_access_key=settings.MINIO_SECRET_KEY,
-            region_name="us-east-1",
+            region_name=settings.MINIO_REGION,
             config=boto_config
         )
 
@@ -71,6 +73,11 @@ class StorageService:
 
         
     async def ensure_bucket(self) -> None:
+        if not settings.MINIO_ENSURE_BUCKET:
+            logger.info(
+                f"Skipping bucket probe for '{self.bucket}' (MINIO_ENSURE_BUCKET=false)"
+            )
+            return
         try:
             await self.client.head_bucket(Bucket=self.bucket)
             logger.info(f"Bucket '{self.bucket}' already exists")
