@@ -1,0 +1,36 @@
+# --- VCS / CI ---
+.git
+.gitignore
+.github
+
+# --- Local Python env & caches ---
+.venv
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+wheels/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# --- Secrets / local config (never bake into the image) ---
+.env
+.env.*
+!.env.example
+
+# --- Local-only infra & docs ---
+docker-compose.yaml
+dev-docs/
+*.md
+!README.md
+
+# --- Editor / OS noise ---
+.vscode/
+.idea/
+.DS_Store
+
+# --- Docker ---
+Dockerfile
+.dockerignore

@@ -29,7 +29,7 @@ class VectorIndexer:
         self,
         url: str = settings.QDRANT_DB_URL or "",
         collection_name: str = settings.DEFAULT_COLLECTION,
-        api_key: str | None = None,
+        api_key: str | None = settings.QDRANT_API_KEY,
     ):
         self.collection_name = collection_name
         self.client = AsyncQdrantClient(url=url, api_key=api_key)
