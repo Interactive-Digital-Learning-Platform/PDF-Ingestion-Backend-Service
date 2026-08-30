@@ -19,7 +19,8 @@ class CeleryStorageService:
         access_key: str = settings.MINIO_ACCESS_KEY,
         secret_key: str = settings.MINIO_SECRET_KEY,
         bucket: str = settings.MINIO_BUCKET,
-        secure: bool = False,
+        secure: bool = settings.MINIO_SECURE,
+        region: str = settings.MINIO_REGION,
     ):
         self.bucket = bucket
         self.client = Minio(
@@ -27,12 +28,18 @@ class CeleryStorageService:
             access_key=access_key,
             secret_key=secret_key,
             secure=secure,
+            region=region,
         )
         logger.info(
             f"StorageService initialised — endpoint={endpoint}, bucket={bucket}"
         )
 
     async def ensure_bucket(self) -> None:
+        if not settings.MINIO_ENSURE_BUCKET:
+            logger.info(
+                f"Skipping bucket probe for '{self.bucket}' (MINIO_ENSURE_BUCKET=false)"
+            )
+            return
 
         def _ensure():
             if not self.client.bucket_exists(self.bucket):

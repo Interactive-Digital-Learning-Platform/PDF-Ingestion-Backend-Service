@@ -23,7 +23,6 @@ class Settings(BaseSettings):
     DEFAULT_COLLECTION: str = "pdf_knowledge_base"
     UPSERT_BATCH_SIZE: int = 100
     QDRANT_DB_URL:str
-    # Qdrant Cloud API key. Leave unset for a local/unauthenticated Qdrant.
     QDRANT_API_KEY: str | None = None
 
     MINIO_ENDPOINT: str
@@ -31,6 +30,13 @@ class Settings(BaseSettings):
     MINIO_SECRET_KEY: str
     MINIO_BUCKET: str
     
+    MINIO_SECURE: bool = False
+    
+    MINIO_REGION: str = "us-east-1"
+    # Probe (and create) the bucket on startup. Turn off when the credentials
+    # are scoped to a single pre-created bucket, e.g. an R2 API token.
+    MINIO_ENSURE_BUCKET: bool = True
+
     REDIS_BROKER_URL: str
     REDIS_BACKEND_URL: str
     
