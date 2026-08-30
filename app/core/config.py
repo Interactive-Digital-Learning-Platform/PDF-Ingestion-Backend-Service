@@ -23,7 +23,9 @@ class Settings(BaseSettings):
     DEFAULT_COLLECTION: str = "pdf_knowledge_base"
     UPSERT_BATCH_SIZE: int = 100
     QDRANT_DB_URL:str
-    
+    # Qdrant Cloud API key. Leave unset for a local/unauthenticated Qdrant.
+    QDRANT_API_KEY: str | None = None
+
     MINIO_ENDPOINT: str
     MINIO_ACCESS_KEY: str
     MINIO_SECRET_KEY: str
