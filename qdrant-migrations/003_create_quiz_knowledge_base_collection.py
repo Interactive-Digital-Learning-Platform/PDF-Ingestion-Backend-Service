@@ -69,6 +69,10 @@ def upgrade(client) -> None:
         for point in points:
             payload = point.payload or {}
             filename = payload.get("filename") or payload.get("source")
+            if not isinstance(filename, str):
+                skipped += 1
+                logger.warning("No filename/source on point %s — skipping", point.id)
+                continue
             meta = _FILENAME_METADATA.get(filename)
             if meta is None:
                 skipped += 1
