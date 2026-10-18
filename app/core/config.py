@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     MAX_RETRIES: int = 3
     RETRY_BASE_DELAY: float = 1.0
     
-    DEFAULT_COLLECTION: str = "pdf_knowledge_base"
+    DEFAULT_COLLECTION: str = "pdf_knowledge_base_v2"
     UPSERT_BATCH_SIZE: int = 100
     QDRANT_DB_URL:str
     QDRANT_API_KEY: str | None = None

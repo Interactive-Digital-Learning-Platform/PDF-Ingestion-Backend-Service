@@ -1,4 +1,4 @@
-REVISION = "005"
+REVISION = "007"
 DESCRIPTION = "index the chapter payload field on pdf_knowledge_base_v2"
 
 _COLLECTION = "pdf_knowledge_base_v2"
