@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from app.core.config import settings
 from app.pipeline.chunker import HierarchicalChunker
 from app.pipeline.embedder import EmbeddingGenerator
+from app.pipeline.sparse_embedder import SparseEmbeddingGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -54,9 +55,8 @@ def init_worker_resources(**kwargs) -> None:
     logger.info("Worker process starting — initializing per-process resources...")
 
     _resources["embedder"] = EmbeddingGenerator()
-    _resources["chunker"] = HierarchicalChunker(
-        chunk_size=settings.CHUNK_SIZE, chunk_overlap=settings.CHUNK_OVERLAP
-    )
+    _resources["sparse_embedder"] = SparseEmbeddingGenerator()
+    _resources["chunker"] = _make_chunker()
     _resources["db_engine"] = create_engine(
         _sync_db_url(), pool_pre_ping=True, pool_size=settings.DB_POOL_SIZE, max_overflow=settings.DB_MAX_OVERFLOW
     )
@@ -113,6 +113,7 @@ def shutdown_worker_resources(**kwargs) -> None:
         redis_client.close()
 
     _resources.pop("embedder", None)
+    _resources.pop("sparse_embedder", None)
     _resources.pop("chunker", None)
     logger.info("Worker resources released")
 
@@ -127,11 +128,24 @@ def get_embedder() -> EmbeddingGenerator:
     return _resources["embedder"]
 
 
+def get_sparse_embedder() -> SparseEmbeddingGenerator:
+    if "sparse_embedder" not in _resources:
+        _resources["sparse_embedder"] = SparseEmbeddingGenerator()
+
+    return _resources["sparse_embedder"]
+
+
+def _make_chunker() -> HierarchicalChunker:
+    return HierarchicalChunker(
+        chunk_words=settings.CHUNK_SIZE_WORDS,
+        overlap_words=settings.CHUNK_OVERLAP_WORDS,
+        min_words=settings.CHUNK_MIN_WORDS,
+    )
+
+
 def get_chunker() -> HierarchicalChunker:
     if "chunker" not in _resources:
-        _resources["chunker"] = HierarchicalChunker(
-            chunk_size=settings.CHUNK_SIZE, chunk_overlap=settings.CHUNK_OVERLAP
-        )
+        _resources["chunker"] = _make_chunker()
 
     return _resources["chunker"]
 

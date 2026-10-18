@@ -88,7 +88,7 @@ class EmbeddingGenerator:
     def _prepare_texts(self, chunks: list[Chunk]) -> list[str]:
         texts = []
         for chunk in chunks:
-            text = chunk.text.replace("\n", " ").strip()
+            text = chunk.contextual_text.replace("\n", " ").strip()
             text = f"search_document: {text}"
             text = self._truncate_if_needed(
                 text, label=f"chunk {chunk.metadata.get('chunk_index', '?')}"

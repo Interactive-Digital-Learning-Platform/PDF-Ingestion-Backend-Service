@@ -1,10 +1,29 @@
+import hashlib
 import re
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import List
+from pathlib import Path
 
-from app.constants.patterns import _HEADING_PATTERNS
+from app.constants.patterns import (
+    _CHAPTER_HEADING,
+    _DOCUMENT_ID_SUFFIX,
+    _HEADING_PATTERNS,
+    _NUMBERED_HEADING,
+    _PAGE_NUMBER,
+    _SECTION_HEADING,
+    _SENTENCE_BOUNDARY,
+    _TRAILING_SENTENCE_PUNCTUATION,
+)
 from app.pipeline.extractor import PageContent
+
+_LEAF_LEVEL = 9
+_MAX_SECTION_DEPTH = 4
+_MAX_HEADING_WORDS = 12
+_MAX_HEADING_CHARS = 120
+_EDGE_LINES = 2
+_RUNNING_LINE_MIN_PAGES = 3
+_PATH_SEPARATOR = " › "
 
 
 @dataclass
@@ -14,11 +33,33 @@ class Chunk:
     token_estimate: int
     metadata: dict = field(default_factory=dict)
 
+    @property
+    def contextual_text(self) -> str:
+        header = self.metadata.get("context_header")
+        return f"{header}\n\n{self.text}" if header else self.text
+
+
+@dataclass
+class _Paragraph:
+    text: str
+    page: int
+    words: int
+    is_heading: bool = False
+    is_overlap: bool = False
+
+
+def _word_count(text: str) -> int:
+    return len(text.split())
+
+
+def _estimate_tokens(text: str) -> int:
+    return int(len(text.split()) * 1.3)
+
 
 def _is_heading(line: str) -> bool:
     line = line.strip()
 
-    if not line or len(line) > 120:
+    if not line or len(line) > _MAX_HEADING_CHARS:
         return False
 
     for pattern in _HEADING_PATTERNS:
@@ -28,199 +69,333 @@ def _is_heading(line: str) -> bool:
     return False
 
 
-def _estimate_tokens(text: str) -> int:
-    return int(len(text.split()) * 1.3)
+def heading_level(line: str) -> int | None:
+    line = line.strip()
+
+    if not line or len(line) > _MAX_HEADING_CHARS or _word_count(line) > _MAX_HEADING_WORDS:
+        return None
+
+    if _CHAPTER_HEADING.match(line):
+        return 1
+
+    section = _SECTION_HEADING.match(line)
+    if section:
+        return section.group(1).count(".") + 2
+
+    if not _is_heading(line) or _TRAILING_SENTENCE_PUNCTUATION.search(line):
+        return None
+
+    numbered = _NUMBERED_HEADING.match(line)
+    if numbered:
+        return numbered.group(1).count(".") + 2
+
+    return _LEAF_LEVEL
+
+
+def document_title(filename: str, override: str | None = None) -> str:
+    if override and override.strip():
+        return override.strip()
+
+    stem = _DOCUMENT_ID_SUFFIX.sub("", Path(filename).stem)
+    words = [w for w in re.split(r"[\s_-]+", stem) if w]
+
+    return " ".join(w[:1].upper() + w[1:] if w.islower() else w for w in words)
+
+
+def _normalise_edge_line(line: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"\d+", "", line)).strip().lower()
+
+
+def _is_structural_heading(line: str) -> bool:
+    return bool(
+        _CHAPTER_HEADING.match(line)
+        or _SECTION_HEADING.match(line)
+        or _NUMBERED_HEADING.match(line)
+    )
+
+
+class DocumentChunkingSession:
+
+    def __init__(
+        self,
+        filename: str,
+        title: str,
+        chunk_words: int,
+        overlap_words: int,
+        min_words: int,
+    ):
+        self.filename = filename
+        self.title = title
+        self.chunk_words = chunk_words
+        self.overlap_words = overlap_words
+        self.min_words = min_words
+
+        self._stack: list[tuple[int, str]] = []
+        self._buffer: list[_Paragraph] = []
+        self._last_was_heading = False
+        self._next_index = 0
+        self._fingerprints: set[str] = set()
+        self._edge_line_pages: dict[str, set[int]] = defaultdict(set)
+
+    @property
+    def chunks_emitted(self) -> int:
+        return self._next_index
+
+    def add_pages(self, pages: list[PageContent]) -> list[Chunk]:
+        for page in pages:
+            self._register_edge_lines(page)
+
+        emitted: list[Chunk] = []
+
+        for page in pages:
+            for paragraph, level in self._page_blocks(page):
+                if level is None:
+                    emitted.extend(self._add_paragraph(paragraph))
+                else:
+                    emitted.extend(self._start_section(paragraph, level))
+
+        return emitted
+
+    def finish(self) -> list[Chunk]:
+        if not any(not p.is_overlap for p in self._buffer):
+            self._buffer = []
+            return []
+
+        chunk = self._emit()
+        self._buffer = []
+        return [chunk] if chunk else []
+
+    def _register_edge_lines(self, page: PageContent) -> None:
+        lines = [line.strip() for line in page.text.splitlines() if line.strip()]
+
+        for line in lines[:_EDGE_LINES] + lines[-_EDGE_LINES:]:
+            if _is_structural_heading(line):
+                continue
+
+            key = _normalise_edge_line(line)
+            if key:
+                self._edge_line_pages[key].add(page.page_count)
+
+    def _is_page_furniture(self, line: str) -> bool:
+        if _PAGE_NUMBER.fullmatch(line):
+            return True
+
+        if _is_structural_heading(line):
+            return False
+
+        key = _normalise_edge_line(line)
+        return len(self._edge_line_pages.get(key, ())) >= _RUNNING_LINE_MIN_PAGES
+
+    def _page_blocks(self, page: PageContent):
+        lines = page.text.splitlines()
+        content_indices = [i for i, line in enumerate(lines) if line.strip()]
+        edge_indices = set(content_indices[:_EDGE_LINES] + content_indices[-_EDGE_LINES:])
+
+        current: list[str] = []
+
+        def paragraph_from(parts: list[str]) -> _Paragraph:
+            text = "\n".join(parts)
+            return _Paragraph(text=text, page=page.page_count, words=_word_count(text))
+
+        for i, raw in enumerate(lines):
+            line = raw.strip()
+
+            if not line:
+                if current:
+                    yield paragraph_from(current), None
+                    current = []
+                continue
+
+            if i in edge_indices and self._is_page_furniture(line):
+                continue
+
+            level = heading_level(line)
+
+            if level is None:
+                current.append(line)
+                continue
+
+            if current:
+                yield paragraph_from(current), None
+                current = []
+
+            yield paragraph_from([line]), level
+
+        if current:
+            yield paragraph_from(current), None
+
+    def _start_section(self, heading: _Paragraph, level: int) -> list[Chunk]:
+        emitted: list[Chunk] = []
+
+        new_words = sum(p.words for p in self._buffer if not p.is_overlap)
+        has_overlap = any(p.is_overlap for p in self._buffer)
+
+        if new_words == 0:
+            self._buffer = []
+        elif new_words >= self.min_words or has_overlap:
+            chunk = self._emit()
+            if chunk:
+                emitted.append(chunk)
+            self._buffer = []
+
+        title = heading.text.strip()
+
+        if self._last_was_heading and level == _LEAF_LEVEL and self._stack:
+            parent_level, parent_title = self._stack[-1]
+            separator = ": " if parent_level < _LEAF_LEVEL else " "
+            merged = f"{parent_title}{separator}{title}"[:_MAX_HEADING_CHARS]
+            self._stack[-1] = (parent_level, merged)
+        else:
+            while self._stack and self._stack[-1][0] >= level:
+                self._stack.pop()
+            self._stack.append((level, title[:_MAX_HEADING_CHARS]))
+            self._stack = self._stack[-_MAX_SECTION_DEPTH:]
+
+        heading.is_heading = True
+        self._buffer.append(heading)
+        self._last_was_heading = True
+
+        return emitted
+
+    def _add_paragraph(self, paragraph: _Paragraph) -> list[Chunk]:
+        emitted: list[Chunk] = []
+
+        pieces = (
+            self._split_long(paragraph)
+            if paragraph.words > self.chunk_words
+            else [paragraph]
+        )
+
+        for piece in pieces:
+            buffered = sum(p.words for p in self._buffer)
+            has_new_content = any(not p.is_overlap for p in self._buffer)
+
+            if buffered + piece.words > self.chunk_words and has_new_content:
+                chunk = self._emit()
+                if chunk:
+                    emitted.append(chunk)
+                self._buffer = self._overlap_tail()
+
+            self._buffer.append(piece)
+
+        self._last_was_heading = False
+        return emitted
+
+    def _split_long(self, paragraph: _Paragraph) -> list[_Paragraph]:
+        sentences = [s for s in _SENTENCE_BOUNDARY.split(paragraph.text) if s.strip()]
+        pieces: list[str] = []
+        current: list[str] = []
+        current_words = 0
+
+        for sentence in sentences:
+            sentence_words = _word_count(sentence)
+
+            if sentence_words > self.chunk_words:
+                if current:
+                    pieces.append(" ".join(current))
+                    current, current_words = [], 0
+
+                words = sentence.split()
+                for start in range(0, len(words), self.chunk_words):
+                    pieces.append(" ".join(words[start : start + self.chunk_words]))
+                continue
+
+            if current_words + sentence_words > self.chunk_words and current:
+                pieces.append(" ".join(current))
+                current, current_words = [], 0
+
+            current.append(sentence)
+            current_words += sentence_words
+
+        if current:
+            pieces.append(" ".join(current))
+
+        return [
+            _Paragraph(text=piece, page=paragraph.page, words=_word_count(piece))
+            for piece in pieces
+        ]
+
+    def _overlap_tail(self) -> list[_Paragraph]:
+        last = next(
+            (p for p in reversed(self._buffer) if not p.is_heading and not p.is_overlap),
+            None,
+        )
+
+        if last is None or self.overlap_words <= 0:
+            return []
+
+        sentences = [s for s in _SENTENCE_BOUNDARY.split(last.text) if s.strip()]
+        tail: list[str] = []
+        tail_words = 0
+
+        for sentence in reversed(sentences):
+            sentence_words = _word_count(sentence)
+            if tail_words + sentence_words > self.overlap_words:
+                break
+            tail.insert(0, sentence)
+            tail_words += sentence_words
+
+        if not tail:
+            return []
+
+        text = " ".join(tail)
+        return [_Paragraph(text=text, page=last.page, words=tail_words, is_overlap=True)]
+
+    def _emit(self) -> Chunk | None:
+        text = "\n\n".join(p.text for p in self._buffer).strip()
+
+        if not text:
+            return None
+
+        fingerprint = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        if fingerprint in self._fingerprints:
+            return None
+        self._fingerprints.add(fingerprint)
+
+        pages = sorted({p.page for p in self._buffer})
+        section_path = [title for _, title in self._stack]
+        chapter = next((title for level, title in self._stack if level < _LEAF_LEVEL), "")
+        context_header = _PATH_SEPARATOR.join(
+            part for part in [self.title, *section_path] if part
+        )
+
+        chunk = Chunk(
+            chunk_id=str(uuid.uuid4()),
+            text=text,
+            token_estimate=_estimate_tokens(text),
+            metadata={
+                "source": self.filename,
+                "filename": self.filename,
+                "pages": pages,
+                "page_start": pages[0],
+                "page_end": pages[-1],
+                "chunk_index": self._next_index,
+                "doc_title": self.title,
+                "section_path": section_path,
+                "section": section_path[-1] if section_path else "",
+                "chapter": chapter,
+                "context_header": context_header,
+                "word_count": _word_count(text),
+                "token_estimate": _estimate_tokens(text),
+            },
+        )
+
+        self._next_index += 1
+        return chunk
 
 
 class HierarchicalChunker:
 
-    def __init__(
-        self, chunk_size: int = 512, chunk_overlap: int = 64, min_chunk_size: int = 80
-    ):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.min_chunk_size = min_chunk_size
+    def __init__(self, chunk_words: int = 260, overlap_words: int = 40, min_words: int = 60):
+        self.chunk_words = chunk_words
+        self.overlap_words = overlap_words
+        self.min_words = min_words
 
-    def chunk_pages(self, pages: list[PageContent]) -> list[Chunk]:
-
-        if not pages:
-            return []
-
-        doc_text, page_map = self._merge_pages(pages)
-        sections = self._split_into_sections(doc_text)
-
-        raw_chunks: list[str] = []
-        for section in sections:
-            raw_chunks.extend(self._chunk_section(section))
-
-        raw_chunks = self._merge_small_chunks(raw_chunks)
-
-        source_meta = pages[0].metadata
-        chunks = self._build_chunks(raw_chunks, page_map, source_meta)
-
-        return chunks
-
-    def _merge_pages(self, pages: list[PageContent]):
-        parts = []
-        page_map = []
-        cursor = 0
-
-        for page in pages:
-            start = cursor
-            parts.append(page.text)
-            cursor += len(page.text)
-            page_map.append((start, cursor, page.page_count))
-
-            parts.append("\n\n")
-            cursor += 2
-
-        return "".join(parts), page_map
-
-    def _split_into_sections(self, doc_text: str) -> List[str]:
-
-        lines = doc_text.splitlines(keepends=True)
-        sections: List[str] = []
-        current: List[str] = []
-
-        for line in lines:
-            if _is_heading(line.rstrip()) and current:
-                section_text = "".join(current).strip()
-                if section_text:
-                    sections.append(section_text)
-                current = [line]
-            else:
-                current.append(line)
-
-        if current:
-            section_text = "".join(current).strip()
-
-            if section_text:
-                sections.append(section_text)
-
-        return sections if sections else [doc_text]
-
-    def _chunk_section(self, section: str) -> List[str]:
-
-        if _estimate_tokens(section) <= self.chunk_size:
-            return [section]
-
-        paragraphs = re.split(r"\n{2,}", section)
-        paragraphs = [p.strip() for p in paragraphs if p.strip()]
-
-        chunks: List[str] = []
-        current_parts: List[str] = []
-        current_tokens = 0
-
-        for para in paragraphs:
-            para_tokens = _estimate_tokens(para)
-
-            if para_tokens > self.chunk_size:
-                if current_parts:
-                    chunks.append("\n\n".join(current_parts))
-                    current_parts = []
-                    current_tokens = 0
-
-                chunks.extend(self._sliding_window(para))
-                continue
-
-            if current_tokens + para_tokens > self.chunk_size and current_parts:
-                chunks.append("\n\n".join(current_parts))
-
-                overlap_para = current_parts[-1] if current_parts else ""
-                current_parts = [overlap_para] if overlap_para else []
-                current_tokens = _estimate_tokens(overlap_para)
-
-            current_parts.append(para)
-            current_tokens += para_tokens
-
-        if current_parts:
-            chunks.append("\n\n".join(current_parts))
-
-        return chunks
-
-    def _sliding_window(self, text: str) -> List[str]:
-        words = text.split()
-
-        step = max(1, self.chunk_size - self.chunk_overlap)
-
-        step_w = int(step / 1.3)
-        size_w = int(self.chunk_size / 1.3)
-
-        chunks = []
-        for i in range(0, len(words), step_w):
-            window = words[i : i + size_w]
-            if len(window) < int(self.min_chunk_size / 1.3):
-                if window:
-                    chunks.append(" ".join(window))
-                break
-            chunks.append(" ".join(window))
-
-        return chunks
-
-    def _merge_small_chunks(self, chunks: List[str]) -> List[str]:
-        if not chunks:
-            return []
-
-        merged: List[str] = []
-        pending = chunks[0]
-
-        for next_chunk in chunks[1:]:
-            if _estimate_tokens(pending) < self.min_chunk_size:
-                pending = pending + "\n\n" + next_chunk
-            else:
-                merged.append(pending)
-                pending = next_chunk
-
-        merged.append(pending)
-        return merged
-
-    def _build_chunks(
-        self,
-        raw_chunks: List[str],
-        page_map: List[tuple],
-        source_meta: dict,
-    ) -> List[Chunk]:
-
-        chunks = []
-        char_cursor = 0
-
-        for idx, text in enumerate(raw_chunks):
-
-            start_char = char_cursor
-            end_char = start_char + len(text)
-            source_pages = self._resolve_pages(start_char, end_char, page_map)
-
-            chunk = Chunk(
-                chunk_id=str(uuid.uuid4()),
-                text=text,
-                token_estimate=_estimate_tokens(text),
-                metadata={
-                    "source": source_meta.get("source", ""),
-                    "filename": source_meta.get("filename", ""),
-                    "pages": source_pages,
-                    "page_start": source_pages[0] if source_pages else 0,
-                    "chunk_index": idx,
-                    "total_chunks": len(raw_chunks),
-                    "token_estimate": _estimate_tokens(text),
-                },
-            )
-            chunks.append(chunk)
-            char_cursor = end_char + 2
-
-        for chunk in chunks:
-            chunk.metadata["total_chunks"] = len(chunks)
-
-        return chunks
-
-    @staticmethod
-    def _resolve_pages(
-        start_char: int,
-        end_char: int,
-        page_map: List[tuple],
-    ) -> List[int]:
-
-        pages = []
-        for p_start, p_end, page_num in page_map:
-            if p_start <= end_char and p_end >= start_char:
-                pages.append(page_num)
-        return pages if pages else [0]
+    def start_document(self, filename: str, title: str | None = None) -> DocumentChunkingSession:
+        return DocumentChunkingSession(
+            filename=filename,
+            title=document_title(filename, title),
+            chunk_words=self.chunk_words,
+            overlap_words=self.overlap_words,
+            min_words=self.min_words,
+        )

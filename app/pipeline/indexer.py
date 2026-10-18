@@ -11,6 +11,8 @@ from qdrant_client.models import (
     FilterSelector,
     MatchValue,
     PointStruct,
+    SparseVector,
+    VectorParams,
 )
 
 from app.constants.namespaces import _QDRANT_POINT_ID_NAMESPACE_VALUE
@@ -40,17 +42,44 @@ class VectorIndexer:
     async def collection_exists(self) -> bool:
         return await self.client.collection_exists(self.collection_name)
 
+    async def uses_hybrid_vectors(self) -> bool:
+        info = await self.client.get_collection(self.collection_name)
+        vectors = info.config.params.vectors
+        sparse_vectors = info.config.params.sparse_vectors or {}
+
+        if isinstance(vectors, VectorParams):
+            return False
+
+        if (
+            isinstance(vectors, dict)
+            and settings.DENSE_VECTOR_NAME in vectors
+            and settings.SPARSE_VECTOR_NAME in sparse_vectors
+        ):
+            return True
+
+        raise RuntimeError(
+            f"Collection '{self.collection_name}' has an unsupported vector layout: expected "
+            f"a single unnamed vector, or '{settings.DENSE_VECTOR_NAME}' plus sparse "
+            f"'{settings.SPARSE_VECTOR_NAME}'"
+        )
+
     async def index_chunks(
         self,
         chunks: list[Chunk],
         embeddings: list[list[float]],
         job_id: str = "",
         document_metadata: dict | None = None,
+        sparse_embeddings: list[SparseVector] | None = None,
     ) -> int:
 
         if len(chunks) != len(embeddings):
             raise ValueError(
                 f"chunks ({len(chunks)}) and embeddings ({len(embeddings)}) "
+                f"must be the same length"
+            )
+        if sparse_embeddings is not None and len(sparse_embeddings) != len(chunks):
+            raise ValueError(
+                f"chunks ({len(chunks)}) and sparse embeddings ({len(sparse_embeddings)}) "
                 f"must be the same length"
             )
         if not chunks:
@@ -63,7 +92,14 @@ class VectorIndexer:
         points = [
             PointStruct(
                 id=_deterministic_point_id(job_id, chunks[i].text),
-                vector=embeddings[i],
+                vector=(
+                    {
+                        settings.DENSE_VECTOR_NAME: embeddings[i],
+                        settings.SPARSE_VECTOR_NAME: sparse_embeddings[i],
+                    }
+                    if sparse_embeddings is not None
+                    else embeddings[i]
+                ),
                 payload={
                     **(document_metadata or {}),
                     **chunks[i].metadata,
@@ -91,6 +127,22 @@ class VectorIndexer:
         elapsed = time.perf_counter() - t0
         logger.info(f"Indexing complete — {total_upserted} points in {elapsed:.2f}s")
         return total_upserted
+
+    async def set_document_payload(self, job_id: str, payload: dict) -> None:
+        await self.client.set_payload(
+            collection_name=self.collection_name,
+            payload=payload,
+            points=Filter(must=[FieldCondition(key="job_id", match=MatchValue(value=job_id))]),
+            wait=True,
+        )
+
+    async def delete_document_payload(self, job_id: str, keys: list[str]) -> None:
+        await self.client.delete_payload(
+            collection_name=self.collection_name,
+            keys=keys,
+            points=Filter(must=[FieldCondition(key="job_id", match=MatchValue(value=job_id))]),
+            wait=True,
+        )
 
     async def delete_document(self, job_id: str) -> int:
 

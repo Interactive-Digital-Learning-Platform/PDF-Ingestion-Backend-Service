@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json
 import logging
 import traceback
@@ -22,6 +21,7 @@ from app.workers.celery_worker_resources import (
     get_embedder,
     get_event_loop,
     get_redis_client,
+    get_sparse_embedder,
 )
 from app.workers.exceptions import CollectionNotConfiguredError, PageLimitExceededError
 
@@ -100,23 +100,6 @@ def _maybe_enqueue_webhook(job: dict) -> None:
     deliver_job_webhook.delay(job_id=str(job["job_id"]))
 
 
-def _process_batch(page_buffer, chunker, embedder):
-
-    chunks = chunker.chunk_pages(page_buffer)
-    embeddings = embedder.embed_chunks(chunks)
-    return chunks, embeddings
-
-
-def _chunk_fingerprint(chunk) -> str:
-    text = chunk.get("text") if isinstance(chunk, dict) else getattr(chunk, "text", None)
-
-    if text is None:
-        text = str(chunk)
-
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-    
-
 async def _run_pipeline(job: dict, publisher: ProgressPublisher) -> dict:
 
     job_id = str(job["job_id"])
@@ -133,6 +116,8 @@ async def _run_pipeline(job: dict, publisher: ProgressPublisher) -> dict:
                 f"Collection '{job['qdrant_collection']}' does not exist — "
                 f"run qdrant-migrations/run_migrations.py before submitting jobs targeting it."
             )
+
+        hybrid = await indexer.uses_hybrid_vectors()
 
         _update_job_sync(
             job_id,
@@ -165,8 +150,11 @@ async def _run_pipeline(job: dict, publisher: ProgressPublisher) -> dict:
         )
 
         extractor = PDFExtractor(min_chars=80)
-        chunker = get_chunker()
         embedder = get_embedder()
+        sparse_embedder = get_sparse_embedder() if hybrid else None
+        chunking = get_chunker().start_document(
+            filename, title=(caller_metadata or {}).get("title")
+        )
 
         pdf_info = extractor.inspect(tmp_path)
         total_pages = pdf_info["total_pages"]
@@ -181,35 +169,24 @@ async def _run_pipeline(job: dict, publisher: ProgressPublisher) -> dict:
         all_chunks_count = 0
         pages_extracted = 0
         page_buffer: list = []
-        seen_fingerprints: set[str] = set()
 
-
-        async def flush(buffer: list) -> None:
+        async def index(chunks: list) -> None:
             nonlocal all_chunks_count
 
-            batch_chunks, batch_embeddings = _process_batch(buffer, chunker, embedder)
+            if not chunks:
+                return
 
-            new_chunks, new_embeddings = [], []
+            await indexer.index_chunks(
+                chunks,
+                embedder.embed_chunks(chunks),
+                job_id,
+                document_metadata=caller_metadata,
+                sparse_embeddings=(
+                    sparse_embedder.embed_chunks(chunks) if sparse_embedder else None
+                ),
+            )
 
-            for chunk, embedding in zip(batch_chunks, batch_embeddings):
-                fp = _chunk_fingerprint(chunk)
-
-                if fp in seen_fingerprints:
-                    continue
-
-                seen_fingerprints.add(fp)
-                new_chunks.append(chunk)
-                new_embeddings.append(embedding)
-
-            if new_chunks:
-                await indexer.index_chunks(
-                    new_chunks,
-                    new_embeddings,
-                    job_id,
-                    document_metadata=caller_metadata,
-                )
-
-                all_chunks_count += len(new_chunks)
+            all_chunks_count += len(chunks)
 
         for page in extractor.extract(tmp_path):
             page.metadata["filename"] = filename
@@ -219,8 +196,8 @@ async def _run_pipeline(job: dict, publisher: ProgressPublisher) -> dict:
             pages_extracted += 1
 
             if len(page_buffer) >= settings.PAGE_BATCH_SIZE:
-                await flush(page_buffer)
-                page_buffer = page_buffer[-settings.PAGE_OVERLAP:]
+                await index(chunking.add_pages(page_buffer))
+                page_buffer = []
 
                 pct = min(5 + int((pages_extracted / total_pages) * 85), 90)
 
@@ -239,8 +216,10 @@ async def _run_pipeline(job: dict, publisher: ProgressPublisher) -> dict:
                     ),
                 )
 
-        if page_buffer:
-            await flush(page_buffer)
+        await index(chunking.add_pages(page_buffer) + chunking.finish())
+
+        if all_chunks_count:
+            await indexer.set_document_payload(job_id, {"total_chunks": all_chunks_count})
 
         _update_job_sync(
             job_id,
