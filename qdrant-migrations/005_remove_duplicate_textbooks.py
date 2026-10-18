@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 
 
 def upgrade(client) -> None:
+    # Qdrant Cloud's strict mode rejects filtering on an unindexed payload field.
+    client.create_payload_index(_COLLECTION, field_name="filename", field_schema="keyword")
+
     for filename in _DUPLICATE_FILENAMES:
         selector = Filter(must=[FieldCondition(key="filename", match=MatchValue(value=filename))])
         count = client.count(_COLLECTION, count_filter=selector, exact=True).count

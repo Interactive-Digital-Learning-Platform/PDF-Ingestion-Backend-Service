@@ -1,0 +1,92 @@
+###############################################################################
+# Build & deploy to Azure Container Apps
+#
+# On every push to main:
+#   1. build the image once and push it to ACR, tagged with the commit SHA
+#   2. roll that image out to both Container Apps:
+#        - API    (pdf-ingestion-service-app) : image default CMD (uvicorn)
+#        - Worker (pdf-ingestion-worker)      : its own `celery ...` command,
+#                                               which an image update keeps
+#
+# Auth: OIDC federated credential on the `github-nous-deployer` managed
+# identity (AcrPush on the registry, Contributor on Nous-Azure). Requires the
+# AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_SUBSCRIPTION_ID secrets.
+#
+# Database and Qdrant migrations are NOT run here — apply them by hand before
+# merging changes that need them.
+###############################################################################
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "dev-docs/**"
+
+permissions:
+  id-token: write # OIDC login to Azure
+  contents: read
+
+# Never run two deploys at once; a newer push waits for the current one.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  RESOURCE_GROUP: Nous-Azure
+  ACR_NAME: nouscontainerregistry
+  ACR_LOGIN_SERVER: nouscontainerregistry-dydgemargghucgcz.azurecr.io
+  IMAGE_NAME: pdf-ingestion-service
+  API_APP: pdf-ingestion-service-app
+  WORKER_APP: pdf-ingestion-worker
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to ACR
+        run: az acr login --name "$ACR_NAME"
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Built on the runner rather than with `az acr build`, since ACR Tasks
+      # may be unavailable on free-credit subscriptions.
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy API
+        run: |
+          az containerapp update \
+            --name "$API_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}" \
+            --query "properties.latestRevisionName" -o tsv
+
+      - name: Deploy worker
+        run: |
+          az containerapp update \
+            --name "$WORKER_APP" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$ACR_LOGIN_SERVER/$IMAGE_NAME:${{ github.sha }}" \
+            --query "properties.latestRevisionName" -o tsv

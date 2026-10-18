@@ -2,7 +2,7 @@ from qdrant_client.models import Distance, Modifier, SparseVectorParams, VectorP
 
 from app.core.config import settings
 
-REVISION = "004"
+REVISION = "006"
 DESCRIPTION = "create pdf_knowledge_base_v2 hybrid collection"
 
 _COLLECTION = "pdf_knowledge_base_v2"
@@ -25,6 +25,10 @@ def upgrade(client) -> None:
     client.create_payload_index(_COLLECTION, field_name="job_id", field_schema="keyword")
     client.create_payload_index(_COLLECTION, field_name="grade", field_schema="integer")
     client.create_payload_index(_COLLECTION, field_name="subject", field_schema="keyword")
+    # AI-Learning-Assistant-Service fetches a hit's neighbouring chunks by job_id + chunk_index, and
+    # Qdrant Cloud's strict mode rejects filtering on an unindexed field.
+    client.create_payload_index(_COLLECTION, field_name="chunk_index", field_schema="integer")
+    client.create_payload_index(_COLLECTION, field_name="filename", field_schema="keyword")
 
 
 def downgrade(client) -> None:

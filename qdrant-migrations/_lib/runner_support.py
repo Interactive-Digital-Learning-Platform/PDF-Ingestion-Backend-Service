@@ -64,6 +64,18 @@ def discover_migrations() -> list[dict]:
         )
 
     migrations.sort(key=lambda m: m["revision"])
+
+    # Applied state is tracked by revision alone, so two files sharing one would make the runner
+    # skip one of them (or hit the tracking table's primary key mid-upgrade) — refuse to run instead.
+    seen: dict[str, Path] = {}
+    for migration in migrations:
+        other = seen.setdefault(migration["revision"], migration["path"])
+        if other != migration["path"]:
+            raise RuntimeError(
+                f"Duplicate Qdrant migration revision {migration['revision']!r}: "
+                f"{other.name} and {migration['path'].name} — renumber one of them."
+            )
+
     return migrations
 
 

@@ -38,7 +38,7 @@ class Job(Base):
     qdrant_collection: Mapped[str] = mapped_column(
         String(255),
         nullable=False,
-        default="pdf_knowledge_base",
+        default="pdf_knowledge_base_v2",
     )
 
     status: Mapped[str] = mapped_column(
