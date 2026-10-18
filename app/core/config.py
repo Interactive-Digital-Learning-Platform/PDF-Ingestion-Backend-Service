@@ -41,11 +41,28 @@ class Settings(BaseSettings):
     REDIS_BACKEND_URL: str
     
     PAGE_BATCH_SIZE: int = 20
-    PAGE_OVERLAP: int = 2
-    CHUNK_SIZE: int = 512
-    CHUNK_OVERLAP: int = 64
-    
+    CHUNK_SIZE_WORDS: int = 260
+    CHUNK_OVERLAP_WORDS: int = 40
+    CHUNK_MIN_WORDS: int = 60
+
+    DENSE_VECTOR_NAME: str = "dense"
+    SPARSE_VECTOR_NAME: str = "bm25"
+    SPARSE_MODEL: str = "Qdrant/bm25"
+    FASTEMBED_CACHE_DIR: str | None = None
+
     ALLOWED_CONTENT_TYPES: set[str]
+
+    KB_SUBJECTS: list[str] = [
+        "Science",
+        "Mathematics",
+        "ICT",
+        "English",
+        "History",
+        "Geography",
+        "Health and Physical Education",
+    ]
+    KB_MIN_GRADE: int = 6
+    KB_MAX_GRADE: int = 13
     
     MAX_FILE_SIZE_MB: int = 100
     

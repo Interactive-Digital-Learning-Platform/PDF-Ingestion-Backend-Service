@@ -14,12 +14,15 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from pydantic import ValidationError
+from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants.sources import WEB_SOURCE_SERVICE
 from app.core.config import settings
 from app.core.database import get_async_session
 from app.models.job_model import Job
+from app.schemas.document_tags import DocumentTags
 from app.schemas.job_schema import JobStatus
 from app.services.job_service import (
     JobService,
@@ -33,11 +36,43 @@ logger = logging.getLogger(__name__)
 ingestion_router = APIRouter(prefix="/ingest", tags=["ingestion"])
 
 
+def _parse_file_tags(metadata: str, file_count: int) -> list[DocumentTags]:
+    try:
+        entries = json.loads(metadata) if metadata.strip() else []
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="metadata must be valid JSON")
+
+    if not isinstance(entries, list) or len(entries) > file_count:
+        raise HTTPException(
+            status_code=400,
+            detail="metadata must be a JSON array with at most one entry per file",
+        )
+
+    tags: list[DocumentTags] = []
+
+    for position, entry in enumerate(entries, 1):
+        try:
+            tags.append(DocumentTags.model_validate(entry or {}))
+        except ValidationError as exc:
+            message = "; ".join(error["msg"] for error in exc.errors())
+            raise HTTPException(status_code=422, detail=f"File {position}: {message}")
+
+    return tags + [DocumentTags()] * (file_count - len(tags))
+
+
+@ingestion_router.get("/curriculum")
+async def get_curriculum():
+    return {
+        "grades": list(range(settings.KB_MIN_GRADE, settings.KB_MAX_GRADE + 1)),
+        "subjects": settings.KB_SUBJECTS,
+    }
+
 
 @ingestion_router.post("/upload")
 async def upload_pdfs(
     files: list[UploadFile] = File(...),
     user_id: str = Form(...),
+    metadata: str = Form("[]"),
     storage_service: StorageService = Depends(get_storage_service),
     job_service: JobService = Depends(get_job_service),
 ):
@@ -48,9 +83,10 @@ async def upload_pdfs(
     if not files:
         raise HTTPException(status_code=400, detail="At least one file is required")
 
+    file_tags = _parse_file_tags(metadata, len(files))
     created_jobs = []
 
-    for file in files:
+    for file, tags in zip(files, file_tags):
         job_id = uuid.uuid4()
 
         object_key, filename, file_size = await validate_and_upload_pdf(
@@ -66,15 +102,19 @@ async def upload_pdfs(
             user_id=user_id,
             source_service=WEB_SOURCE_SERVICE,
             qdrant_collection=settings.DEFAULT_COLLECTION,
-            caller_metadata={"user_id": user_id},
+            caller_metadata={"user_id": user_id, **tags.payload()},
         )
 
-        logger.info(f"Job {job.job_id} queued for {filename} (user={user_id})")
+        logger.info(
+            f"Job {job.job_id} queued for {filename} "
+            f"(user={user_id}, grade={tags.grade}, subject={tags.subject})"
+        )
         created_jobs.append(
             {
                 "job_id": str(job.job_id),
                 "filename": filename,
                 "status": JobStatus.QUEUED.value,
+                "caller_metadata": job.caller_metadata,
             }
         )
 
@@ -172,6 +212,61 @@ async def get_job_status(
     db: AsyncSession = Depends(get_async_session),
 ):
     job = await _get_job_or_404(job_id, db)
+    return job.to_dict()
+
+
+@ingestion_router.patch("/{job_id}/metadata")
+async def update_job_metadata(
+    job_id: str,
+    tags: DocumentTags,
+    db: AsyncSession = Depends(get_async_session),
+):
+    job = await _get_job_or_404(job_id, db)
+
+    if job.status not in (JobStatus.DONE.value, JobStatus.FAILED.value):
+        raise HTTPException(
+            status_code=409,
+            detail="Tags can be changed once ingestion has finished",
+        )
+
+    changes = tags.model_dump(include=tags.model_fields_set)
+    if not changes:
+        return job.to_dict()
+
+    to_set = {key: value for key, value in changes.items() if value is not None}
+    to_clear = [key for key, value in changes.items() if value is None]
+
+    if job.status == JobStatus.DONE.value:
+        from app.pipeline.indexer import VectorIndexer
+
+        indexer = VectorIndexer(
+            url=settings.QDRANT_DB_URL,
+            collection_name=job.qdrant_collection,
+        )
+
+        try:
+            if to_set:
+                await indexer.set_document_payload(str(job.job_id), to_set)
+            if to_clear:
+                await indexer.delete_document_payload(str(job.job_id), to_clear)
+        except (UnexpectedResponse, ResponseHandlingException, OSError) as exc:
+            logger.error(f"Could not update Qdrant tags for job {job_id}: {exc}")
+            raise HTTPException(
+                status_code=502, detail="Could not update the knowledge base tags"
+            )
+        finally:
+            await indexer.client.close()
+
+    metadata = {
+        key: value
+        for key, value in {**(job.caller_metadata or {}), **to_set}.items()
+        if key not in to_clear
+    }
+    job.caller_metadata = metadata
+    await db.commit()
+    await db.refresh(job)
+
+    logger.info(f"Updated tags for job {job_id}: set={to_set} cleared={to_clear}")
     return job.to_dict()
 
 
