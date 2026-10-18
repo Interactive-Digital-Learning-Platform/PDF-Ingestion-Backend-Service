@@ -139,8 +139,8 @@ class StorageService:
             logger.info(f"Uploaded '{object_key}' via single PutObject ({total} bytes)")
             return total
 
-        buffer.extend(first)
-        total += len(first)
+        buffer.extend(second)
+        total += len(second)
         _check_limit()
 
 
